@@ -21,6 +21,7 @@ import httpx
 
 from google.adk import Agent
 from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.models.lite_llm import LiteLlm
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools.tool_context import ToolContext
 from .remote_agent_connection import RemoteAgentConnections
@@ -56,7 +57,8 @@ class PurchasingAgent:
 
     def create_agent(self) -> Agent:
         return Agent(
-            model="gemini-2.5-flash",
+            # model="gemini-2.5-flash",
+            model=LiteLlm(model="openai/gpt-4o"),
             name="purchasing_agent",
             instruction=self.root_instruction,
             before_model_callback=self.before_model_callback,

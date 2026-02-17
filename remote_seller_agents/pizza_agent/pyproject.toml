@@ -16,6 +16,8 @@ dependencies = [
     "sse-starlette>=2.3.3",
     "uvicorn>=0.34.2",
     "a2a-sdk>=0.2.16",
+    "google-adk[extensions]>=1.25.0",
+    "langchain-openai>=0.3.35",
 ]
 
 [tool.hatch.build.targets.wheel]

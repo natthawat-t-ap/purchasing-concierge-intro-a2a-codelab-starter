@@ -23,15 +23,15 @@ from purchasing_concierge.agent import root_agent
 
 load_dotenv()
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION")
-STAGING_BUCKET = os.getenv("STAGING_BUCKET")
+# PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+# LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION")
+# STAGING_BUCKET = os.getenv("STAGING_BUCKET")
 
-vertexai.init(
-    project=PROJECT_ID,
-    location=LOCATION,
-    staging_bucket=STAGING_BUCKET,
-)
+# vertexai.init(
+#     project=PROJECT_ID,
+#     location=LOCATION,
+#     staging_bucket=STAGING_BUCKET,
+# )
 
 adk_app = reasoning_engines.AdkApp(
     agent=root_agent,
@@ -49,7 +49,7 @@ remote_app = agent_engines.create(
         "./purchasing_concierge",
     ],
     env_vars={
-        "GOOGLE_GENAI_USE_VERTEXAI": os.environ["GOOGLE_GENAI_USE_VERTEXAI"],
+        # "GOOGLE_GENAI_USE_VERTEXAI": os.environ["GOOGLE_GENAI_USE_VERTEXAI"],
         "PIZZA_SELLER_AGENT_URL": os.environ["PIZZA_SELLER_AGENT_URL"],
         "BURGER_SELLER_AGENT_URL": os.environ["BURGER_SELLER_AGENT_URL"],
     },

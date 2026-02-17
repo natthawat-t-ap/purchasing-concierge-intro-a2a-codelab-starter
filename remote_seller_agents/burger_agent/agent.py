@@ -13,19 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-
 from pydantic import BaseModel
 import uuid
 from crewai import Agent, Crew, LLM, Task, Process
 from crewai.tools import tool
 from dotenv import load_dotenv
-import litellm
 import os
 
 load_dotenv()
-
-litellm.vertex_project = os.getenv("GOOGLE_CLOUD_PROJECT")
-litellm.vertex_location = os.getenv("GOOGLE_CLOUD_LOCATION")
 
 
 class OrderItem(BaseModel):
@@ -99,7 +94,7 @@ Provided below is the available burger menu and it's related price:
 
     def invoke(self, query, sessionId) -> str:
         model = LLM(
-            model="vertex_ai/gemini-2.5-flash-lite",  # Use base model name without provider prefix
+            model="openai/gpt-4o",
         )
         burger_agent = Agent(
             role="Burger Seller Agent",
