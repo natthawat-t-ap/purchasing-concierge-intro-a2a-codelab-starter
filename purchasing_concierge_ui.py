@@ -7,9 +7,7 @@ This Gradio UI communicates directly with a remote A2A agent
 
 import gradio as gr
 import uuid
-import json
 from typing import List, Dict, Any
-from pprint import pformat
 from dotenv import load_dotenv
 import os
 import requests
@@ -25,10 +23,9 @@ from a2a.types import (
 load_dotenv()
 
 AGENT_URL = os.getenv("DIGITAL_DASHBOARD_AGENT_URL", "http://localhost:80")
-CONTEXT_ID = str(uuid.uuid4())
 
 
-def send_a2a_message(message_text: str) -> SendMessageResponse:
+def send_a2a_message(message_text: str, context_id: str) -> SendMessageResponse:
     """Send a message to the remote A2A agent using JSON-RPC."""
     message_id = str(uuid.uuid4())
 
@@ -37,7 +34,7 @@ def send_a2a_message(message_text: str) -> SendMessageResponse:
             "role": "user",
             "parts": [{"type": "text", "text": message_text}],
             "messageId": message_id,
-            "contextId": CONTEXT_ID,
+            "contextId": context_id,
         },
     }
 
@@ -97,46 +94,53 @@ def extract_response_text(send_response: SendMessageResponse) -> str:
     return f"Response:\n```json\n{send_response.model_dump_json(indent=2, exclude_none=True)}\n```"
 
 
-async def get_response_from_agent(
-    message: str,
-    history: List[Dict[str, Any]],
-) -> str:
-    """Send the message to the A2A agent and get a response."""
-    try:
-        send_response = send_a2a_message(message)
-        response_text = extract_response_text(send_response)
+def respond(message: str, history: List[Dict[str, Any]], context_id: str):
+    """Send the message to the A2A agent and return updated history + context."""
+    history = history or []
+    history.append({"role": "user", "content": message})
 
-        yield [
-            gr.ChatMessage(
-                role="assistant",
-                content=response_text,
-            )
-        ]
+    try:
+        send_response = send_a2a_message(message, context_id)
+        response_text = extract_response_text(send_response)
     except requests.exceptions.ConnectionError:
-        yield [
-            gr.ChatMessage(
-                role="assistant",
-                content=f"❌ Cannot connect to agent at {AGENT_URL}. Make sure the A2A server is running.",
-            )
-        ]
+        response_text = f"❌ Cannot connect to agent at {AGENT_URL}. Make sure the A2A server is running."
     except Exception as e:
-        yield [
-            gr.ChatMessage(
-                role="assistant",
-                content=f"❌ Error: {str(e)}",
-            )
-        ]
+        response_text = f"❌ Error: {str(e)}"
+
+    history.append({"role": "assistant", "content": response_text})
+    return history, "", context_id
+
+
+def new_session():
+    """Clear chat and create a new session (new context_id)."""
+    return [], str(uuid.uuid4())
 
 
 if __name__ == "__main__":
-    demo = gr.ChatInterface(
-        get_response_from_agent,
-        title="Digital Dashboard AI - A2A Client",
-        description=f"Connected to A2A agent at {AGENT_URL}",
-        type="messages",
-    )
+    with gr.Blocks(title="Digital Dashboard AI - A2A Client") as demo:
+        gr.Markdown("# Digital Dashboard AI - A2A Client")
+        gr.Markdown(f"Connected to A2A agent at `{AGENT_URL}`")
 
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=8080,
-    )
+        # Hidden state for context_id (session)
+        context_id = gr.State(value=str(uuid.uuid4()))
+
+        chatbot = gr.Chatbot(type="messages", height=500)
+
+        with gr.Row():
+            msg = gr.Textbox(
+                placeholder="Type your message...",
+                show_label=False,
+                scale=9,
+            )
+            send_btn = gr.Button("Send", scale=1, variant="primary")
+
+        delete_btn = gr.Button("🗑️ New Session", variant="stop")
+
+        # Send on enter or button click
+        msg.submit(respond, [msg, chatbot, context_id], [chatbot, msg, context_id])
+        send_btn.click(respond, [msg, chatbot, context_id], [chatbot, msg, context_id])
+
+        # Delete button = new session (clear chat + new context_id)
+        delete_btn.click(new_session, outputs=[chatbot, context_id])
+
+    demo.launch(server_name="0.0.0.0", server_port=8080)
