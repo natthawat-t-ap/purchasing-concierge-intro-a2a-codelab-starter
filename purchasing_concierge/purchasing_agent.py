@@ -58,7 +58,7 @@ class PurchasingAgent:
     def create_agent(self) -> Agent:
         return Agent(
             # model="gemini-2.5-flash",
-            model=LiteLlm(model="openai/gpt-4o"),
+            model=LiteLlm(model="openai/gpt-5.4-mini"),
             name="purchasing_agent",
             instruction=self.root_instruction,
             before_model_callback=self.before_model_callback,
@@ -74,30 +74,25 @@ class PurchasingAgent:
 
     def root_instruction(self, context: ReadonlyContext) -> str:
         current_agent = self.check_active_agent(context)
-        return f"""You are an expert purchasing delegator that can delegate the user product inquiry and purchase request to the
-appropriate seller remote agents.
+        return f"""You are an expert delegator that can delegate user requests to the appropriate remote agents.
 
 Execution:
-- For actionable tasks, you can use `send_task` to assign tasks to remote agents to perform.
-- When the remote agent is repeatedly asking for user confirmation, assume that the remote agent doesn't have access to user's conversation context. 
-    So improve the task description to include all the necessary information related to that agent
-- Never ask user permission when you want to connect with remote agents. If you need to make connection with multiple remote agents, directly
-    connect with them without asking user permission or asking user preference
-- Always show the detailed response information from the seller agent and propagate it properly to the user. 
-- If the remote seller is asking for confirmation, rely the confirmation question with proper and necessary information to the user if the user haven't do so. 
-- If the user already confirmed the related order in the past conversation history, you can confirm on behalf of the user
-- Do not give irrelevant context to remote seller agent. For example, ordered pizza item is not relevant for the burger seller agent
-- Never ask order confirmation to the remote seller agent 
+- For actionable tasks, use `send_task` to assign tasks to remote agents.
+- When the remote agent is repeatedly asking for user confirmation, assume the remote agent doesn't have access to user's conversation context. 
+    Improve the task description to include all necessary information.
+- Never ask user permission when connecting with remote agents. Directly connect without asking user preference.
+- Always show the detailed response information from the remote agent and propagate it properly to the user.
+- If the remote agent is asking for confirmation, relay the confirmation question with proper information to the user.
 
 Please rely on tools to address the request, and don't make up the response. If you are not sure, please ask the user for more details.
 Focus on the most recent parts of the conversation primarily.
 
-If there is an active agent, send the request to that agent with the update task tool.
+If there is an active agent, send the request to that agent.
 
 Agents:
 {self.agents}
 
-Current active seller agent: {current_agent["active_agent"]}
+Current active agent: {current_agent["active_agent"]}
 """
 
     def check_active_agent(self, context: ReadonlyContext):
