@@ -1,109 +1,138 @@
 """
-Copyright 2025 Google LLC
+Purchasing Concierge UI - A2A Direct Client
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    https://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+This Gradio UI communicates directly with a remote A2A agent
+(digital-dashboard-ai) via the A2A protocol instead of Vertex AI Agent Engine.
 """
 
 import gradio as gr
-
+import uuid
+import json
 from typing import List, Dict, Any
 from pprint import pformat
-from vertexai import agent_engines
-import os
 from dotenv import load_dotenv
+import os
+import requests
+
+from a2a.types import (
+    MessageSendParams,
+    SendMessageRequest,
+    SendMessageResponse,
+    SendMessageSuccessResponse,
+    Task,
+)
 
 load_dotenv()
 
-USER_ID = "default_user"
+AGENT_URL = os.getenv("DIGITAL_DASHBOARD_AGENT_URL", "http://localhost:80")
+CONTEXT_ID = str(uuid.uuid4())
 
-REMOTE_APP = agent_engines.get(os.getenv("AGENT_ENGINE_RESOURCE_NAME"))
-SESSION_ID = REMOTE_APP.create_session(user_id=USER_ID)["id"]
+
+def send_a2a_message(message_text: str) -> SendMessageResponse:
+    """Send a message to the remote A2A agent using JSON-RPC."""
+    message_id = str(uuid.uuid4())
+
+    payload = {
+        "message": {
+            "role": "user",
+            "parts": [{"type": "text", "text": message_text}],
+            "messageId": message_id,
+            "contextId": CONTEXT_ID,
+        },
+    }
+
+    request = SendMessageRequest(
+        id=message_id,
+        params=MessageSendParams.model_validate(payload),
+    )
+
+    rpc_payload = request.model_dump(mode="json", exclude_none=True)
+    response = requests.post(AGENT_URL, json=rpc_payload, timeout=120)
+    response.raise_for_status()
+    return SendMessageResponse.model_validate(response.json())
+
+
+def extract_response_text(send_response: SendMessageResponse) -> str:
+    """Extract text content from A2A SendMessageResponse."""
+    if not isinstance(send_response.root, SendMessageSuccessResponse):
+        return f"Error: received non-success response:\n```\n{send_response.model_dump_json(indent=2)}\n```"
+
+    result = send_response.root.result
+
+    # Handle Task response
+    if isinstance(result, Task):
+        parts = []
+        if result.artifacts:
+            for artifact in result.artifacts:
+                for part in artifact.parts:
+                    if hasattr(part, "root") and hasattr(part.root, "text"):
+                        parts.append(part.root.text)
+                    elif hasattr(part, "text"):
+                        parts.append(part.text)
+        if result.status and result.status.message:
+            status_msg = result.status.message
+            if hasattr(status_msg, "root") and hasattr(status_msg.root, "text"):
+                parts.append(status_msg.root.text)
+            elif hasattr(status_msg, "parts"):
+                for p in status_msg.parts:
+                    if hasattr(p, "root") and hasattr(p.root, "text"):
+                        parts.append(p.root.text)
+                    elif hasattr(p, "text"):
+                        parts.append(p.text)
+        if parts:
+            return "\n\n".join(parts)
+        return f"Task completed with status: {result.status.state if result.status else 'unknown'}"
+
+    # Handle Message response
+    if hasattr(result, "parts"):
+        texts = []
+        for part in result.parts:
+            if hasattr(part, "root") and hasattr(part.root, "text"):
+                texts.append(part.root.text)
+            elif hasattr(part, "text"):
+                texts.append(part.text)
+        if texts:
+            return "\n\n".join(texts)
+
+    return f"Response:\n```json\n{send_response.model_dump_json(indent=2, exclude_none=True)}\n```"
 
 
 async def get_response_from_agent(
     message: str,
     history: List[Dict[str, Any]],
 ) -> str:
-    """Send the message to the backend and get a response.
+    """Send the message to the A2A agent and get a response."""
+    try:
+        send_response = send_a2a_message(message)
+        response_text = extract_response_text(send_response)
 
-    Args:
-        message: Text content of the message.
-        history: List of previous message dictionaries in the conversation.
-
-    Returns:
-        Text response from the backend service.
-    """
-    # try:
-
-    default_response = "No response from agent"
-
-    responses = []
-
-    for event in REMOTE_APP.stream_query(
-        user_id=USER_ID,
-        session_id=SESSION_ID,
-        message=message,
-    ):
-        parts = event.get("content", {}).get("parts", [])
-        if parts:
-            for part in parts:
-                if part.get("function_call"):
-                    formatted_call = f"```python\n{pformat(part.get('function_call'), indent=2, width=80)}\n```"
-                    responses.append(
-                        gr.ChatMessage(
-                            role="assistant",
-                            content=f"{part.get('function_call').get('name')}:\n{formatted_call}",
-                            metadata={"title": "🛠️ Tool Call"},
-                        )
-                    )
-                elif part.get("function_response"):
-                    formatted_response = f"```python\n{pformat(part.get('function_response'), indent=2, width=80)}\n```"
-
-                    responses.append(
-                        gr.ChatMessage(
-                            role="assistant",
-                            content=formatted_response,
-                            metadata={"title": "⚡ Tool Response"},
-                        )
-                    )
-                elif part.get("text"):
-                    responses.append(
-                        gr.ChatMessage(
-                            role="assistant",
-                            content=part.get("text"),
-                        )
-                    )
-                else:
-                    formatted_unknown_parts = f"Unknown agent response part:\n\n```python\n{pformat(part, indent=2, width=80)}\n```"
-
-                    responses.append(
-                        gr.ChatMessage(
-                            role="assistant",
-                            content=formatted_unknown_parts,
-                        )
-                    )
-
-    if not responses:
-        yield default_response
-
-    yield responses
+        yield [
+            gr.ChatMessage(
+                role="assistant",
+                content=response_text,
+            )
+        ]
+    except requests.exceptions.ConnectionError:
+        yield [
+            gr.ChatMessage(
+                role="assistant",
+                content=f"❌ Cannot connect to agent at {AGENT_URL}. Make sure the A2A server is running.",
+            )
+        ]
+    except Exception as e:
+        yield [
+            gr.ChatMessage(
+                role="assistant",
+                content=f"❌ Error: {str(e)}",
+            )
+        ]
 
 
 if __name__ == "__main__":
     demo = gr.ChatInterface(
         get_response_from_agent,
-        title="Purchasing Concierge",
-        description="This assistant can help you to purchase food from remote sellers.",
+        title="Digital Dashboard AI - A2A Client",
+        description=f"Connected to A2A agent at {AGENT_URL}",
         type="messages",
     )
 
