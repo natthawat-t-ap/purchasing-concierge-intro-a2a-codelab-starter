@@ -8,7 +8,9 @@ dependencies = [
     "a2a-sdk>=0.2.16",
     "google-adk==1.15.1",
     "gradio>=5.38.2",
+    "langfuse>=2.51.3",
     "litellm>=1.81.13",
+    "openinference-instrumentation-google-adk>=0.1.0",
     "requests>=2.31.0",
 ]
 

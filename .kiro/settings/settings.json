@@ -1,0 +1,5 @@
+{
+  "trustedCommands": [
+    "python -c \"import ast, sys; f='${file}'; ast.parse(open(f, encoding='utf-8').read()); print(f'{f}: OK')\""
+  ]
+}

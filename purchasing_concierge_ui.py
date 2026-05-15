@@ -2,113 +2,116 @@
 Purchasing Concierge UI - A2A Direct Client
 
 This Gradio UI communicates directly with a remote A2A agent
-(digital-dashboard-ai) via the A2A protocol instead of Vertex AI Agent Engine.
+(digital-dashboard-ai) via the A2A protocol.
 """
 
 import gradio as gr
 import uuid
+import json
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 import os
 import requests
-
-from a2a.types import (
-    MessageSendParams,
-    SendMessageRequest,
-    SendMessageResponse,
-    SendMessageSuccessResponse,
-    Task,
-)
 
 load_dotenv()
 
 AGENT_URL = os.getenv("DIGITAL_DASHBOARD_AGENT_URL", "http://localhost:80")
 
 
-def send_a2a_message(message_text: str, context_id: str) -> SendMessageResponse:
-    """Send a message to the remote A2A agent using JSON-RPC."""
+def send_a2a_message(message_text: str, context_id: str) -> dict:
+    """Send a message to the remote A2A agent using JSON-RPC message/send."""
     message_id = str(uuid.uuid4())
 
-    payload = {
-        "message": {
-            "role": "user",
-            "parts": [{"type": "text", "text": message_text}],
-            "messageId": message_id,
-            "contextId": context_id,
+    rpc_payload = {
+        "jsonrpc": "2.0",
+        "id": message_id,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": message_text}],
+                "messageId": message_id,
+                "contextId": context_id,
+            }
         },
     }
 
-    request = SendMessageRequest(
-        id=message_id,
-        params=MessageSendParams.model_validate(payload),
-    )
-
-    rpc_payload = request.model_dump(mode="json", exclude_none=True)
-    response = requests.post(AGENT_URL, json=rpc_payload, timeout=120)
+    response = requests.post(AGENT_URL, json=rpc_payload, timeout=180)
     response.raise_for_status()
-    return SendMessageResponse.model_validate(response.json())
+    return response.json()
 
 
-def extract_response_text(send_response: SendMessageResponse) -> str:
-    """Extract text content from A2A SendMessageResponse."""
-    if not isinstance(send_response.root, SendMessageSuccessResponse):
-        return f"Error: received non-success response:\n```\n{send_response.model_dump_json(indent=2)}\n```"
+def extract_text_from_response(resp_json: dict) -> str:
+    """Extract text from raw JSON-RPC response dict."""
+    # Check for JSON-RPC error
+    if "error" in resp_json:
+        err = resp_json["error"]
+        return f"Agent error ({err.get('code', '?')}): {err.get('message', 'Unknown')}"
 
-    result = send_response.root.result
+    result = resp_json.get("result", {})
 
-    # Handle Task response
-    if isinstance(result, Task):
-        parts = []
-        if result.artifacts:
-            for artifact in result.artifacts:
-                for part in artifact.parts:
-                    if hasattr(part, "root") and hasattr(part.root, "text"):
-                        parts.append(part.root.text)
-                    elif hasattr(part, "text"):
-                        parts.append(part.text)
-        if result.status and result.status.message:
-            status_msg = result.status.message
-            if hasattr(status_msg, "root") and hasattr(status_msg.root, "text"):
-                parts.append(status_msg.root.text)
-            elif hasattr(status_msg, "parts"):
-                for p in status_msg.parts:
-                    if hasattr(p, "root") and hasattr(p.root, "text"):
-                        parts.append(p.root.text)
-                    elif hasattr(p, "text"):
-                        parts.append(p.text)
-        if parts:
-            return "\n\n".join(parts)
-        return f"Task completed with status: {result.status.state if result.status else 'unknown'}"
+    texts = []
 
-    # Handle Message response
-    if hasattr(result, "parts"):
-        texts = []
-        for part in result.parts:
-            if hasattr(part, "root") and hasattr(part.root, "text"):
-                texts.append(part.root.text)
-            elif hasattr(part, "text"):
-                texts.append(part.text)
-        if texts:
-            return "\n\n".join(texts)
+    # Extract from artifacts
+    for artifact in result.get("artifacts", []):
+        for part in artifact.get("parts", []):
+            t = _get_text(part)
+            if t:
+                texts.append(t)
 
-    return f"Response:\n```json\n{send_response.model_dump_json(indent=2, exclude_none=True)}\n```"
+    # Extract from status message
+    status = result.get("status", {})
+    status_msg = status.get("message")
+    if status_msg:
+        # status.message can have parts directly
+        for part in status_msg.get("parts", []):
+            t = _get_text(part)
+            if t:
+                texts.append(t)
+
+    if texts:
+        return "\n\n".join(texts)
+
+    # Fallback: dump the result
+    return f"```json\n{json.dumps(result, indent=2, ensure_ascii=False)}\n```"
 
 
-def respond(message: str, history: List[Dict[str, Any]], context_id: str):
-    """Send the message to the A2A agent and return updated history + context."""
+def _get_text(part: dict) -> str | None:
+    """Extract text from a part dict, handling nested 'root' wrapper."""
+    if "text" in part:
+        return part["text"]
+    root = part.get("root", {})
+    if root and "text" in root:
+        return root["text"]
+    return None
+
+
+def add_user_message(message: str, history: List[Dict[str, Any]]):
+    """Append user message to history and clear input immediately."""
     history = history or []
     history.append({"role": "user", "content": message})
+    return history, ""
+
+
+def bot_respond(history: List[Dict[str, Any]], context_id: str):
+    """Call the A2A agent and append the response."""
+    if not history:
+        return
+
+    user_message = history[-1]["content"]
 
     try:
-        send_response = send_a2a_message(message, context_id)
-        response_text = extract_response_text(send_response)
+        resp_json = send_a2a_message(user_message, context_id)
+        response_text = extract_text_from_response(resp_json)
     except requests.exceptions.ConnectionError:
         response_text = f"❌ Cannot connect to agent at {AGENT_URL}. Make sure the A2A server is running."
+    except requests.exceptions.Timeout:
+        response_text = "❌ Request timed out. The agent may be processing a complex query."
     except Exception as e:
         response_text = f"❌ Error: {str(e)}"
 
     history.append({"role": "assistant", "content": response_text})
-    return history, "", context_id
+    yield history
 
 
 def new_session():
@@ -121,14 +124,12 @@ if __name__ == "__main__":
         gr.Markdown("# Digital Dashboard AI - A2A Client")
         gr.Markdown(f"Connected to A2A agent at `{AGENT_URL}`")
 
-        # Hidden state for context_id (session)
         context_id = gr.State(value=str(uuid.uuid4()))
-
         chatbot = gr.Chatbot(type="messages", height=500)
 
         with gr.Row():
             msg = gr.Textbox(
-                placeholder="Type your message...",
+                placeholder='Type message or JSON e.g. {"empcode":"AP005032","message":"ขอด lead"}',
                 show_label=False,
                 scale=9,
             )
@@ -136,11 +137,17 @@ if __name__ == "__main__":
 
         delete_btn = gr.Button("🗑️ New Session", variant="stop")
 
-        # Send on enter or button click
-        msg.submit(respond, [msg, chatbot, context_id], [chatbot, msg, context_id])
-        send_btn.click(respond, [msg, chatbot, context_id], [chatbot, msg, context_id])
+        msg.submit(
+            add_user_message, [msg, chatbot], [chatbot, msg]
+        ).then(
+            bot_respond, [chatbot, context_id], [chatbot]
+        )
+        send_btn.click(
+            add_user_message, [msg, chatbot], [chatbot, msg]
+        ).then(
+            bot_respond, [chatbot, context_id], [chatbot]
+        )
 
-        # Delete button = new session (clear chat + new context_id)
         delete_btn.click(new_session, outputs=[chatbot, context_id])
 
     demo.launch(server_name="0.0.0.0", server_port=8080)
